@@ -63,12 +63,14 @@ if (TARGET CUDA::cudart AND TARGET LibTorch AND TARGET TensorRT)
 
     # 获取所有cu文件
     # CONFIGURE_DEPENDS，指如果文件变化了，则自动重新GLOB
+    # file(GLOB_RECURSE moer_cuda_cu CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/default/*.cu")
+    # file(GLOB_RECURSE moer_cuda_h CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/default/*.h")
     file(GLOB_RECURSE moer_cuda_cu CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.cu")
-    # file(GLOB_RECURSE moer_cuda_cuh CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.cuh")
+    file(GLOB_RECURSE moer_cuda_cpp CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp")
     file(GLOB_RECURSE moer_cuda_h CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.h")
 
     # 编译一个CUDA的静态库，把上面这些cu文件都编译了（.h文件会被自动忽略）
-    add_library(moer_cuda SHARED ${moer_cuda_h} ${moer_cuda_cu})
+    add_library(moer_cuda SHARED ${moer_cuda_h} ${moer_cuda_cu} ${moer_cuda_cpp})
 
     # 设置目标属性
     set_target_properties(moer_cuda PROPERTIES
@@ -80,9 +82,17 @@ if (TARGET CUDA::cudart AND TARGET LibTorch AND TARGET TensorRT)
     # 宏, link include, link sources
     target_compile_definitions(moer_cuda PRIVATE MOER_CUDA_EXPORTS) # 只在编译moer_cuda时，启用这个宏，保证导出符号正确性
     # 直接把当前文件夹作为include，这样开发的时候就不用把header和cu分开写了
-    target_include_directories(moer_cuda PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+    target_include_directories(moer_cuda PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/default)
+    target_include_directories(moer_cuda PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/trt_plugin/include)
+    target_include_directories(moer_cuda PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/trt_plugin/gaussian_blur)
+    target_include_directories(moer_cuda PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/trt_plugin/linalg_solve)
     target_include_directories(moer_cuda PUBLIC ${CUDAToolkit_INCLUDE_DIRS})
     target_link_libraries(moer_cuda PUBLIC CUDA::cudart CUDA::cublas CUDA::cusolver LibTorch TensorRT)
+
+    # MARK: RealtimeDS Plugin
+    # message(STATUS "Prepare to compile TensorRT plugins (from RealtimeDS).")
+    # add_subdirectory(trt_plugin)
+    # target_link_libraries(moer_cuda PUBLIC RealtimeDS::linalgSolvePlugin RealtimeDS::gaussianBlurPlugin)
 
     # Reference: https://github.com/microsoft/vcpkg/issues/30272#issuecomment-1817929528
     # Hack for the extra \EHsc that gets added on Windows to the nvcc compile line, which causes the error:

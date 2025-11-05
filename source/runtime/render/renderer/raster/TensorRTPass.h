@@ -28,6 +28,27 @@
 #include <iostream>
 #include <memory>
 
+// plugin
+#include "GaussianBlurPlugin.h"
+#include "LinalgSolvePlugin.h"
+#include <NvInferRuntime.h>
+
+template<typename T>
+class MoerPluginRegistrar {
+public:
+    MoerPluginRegistrar() {
+        getPluginRegistry()->registerCreator(instance, "");
+    }
+
+private:
+    //! Plugin instance.
+    T instance{};
+};
+namespace nvinfer1::plugin {
+static nvinfer1::PluginRegistrar<GaussianBlurPluginCreator> pluginRegistrarGaussianBlurPluginCreator{};
+} // namespace nvinfer1::plugin
+static nvinfer1::PluginRegistrar<LinalgSolvePluginCreator> pluginRegistrarLinalgSolvePluginCreator{};
+
 using namespace nvinfer1;
 
 namespace Moer::Render::Raster {
@@ -89,8 +110,6 @@ class TensorRTLogger : public ILogger {
  */
 struct TensorRTEngine {
 
-    std::string                            onnx_path;
-    std::string                            cache_path;
     std::unique_ptr<IBuilder>              builder;
     std::unique_ptr<INetworkDefinition>    network;
     std::unique_ptr<nvonnxparser::IParser> parser;
@@ -102,16 +121,24 @@ struct TensorRTEngine {
     UnorderedMap<std::string, size_t>  device_mem_size_map;
 
 public:
-    TensorRTEngine(const std::string& _onnx_path) : onnx_path(_onnx_path) {
+    TensorRTEngine(const std::string& onnx_path, bool is_cache = false) {
 
         LOG_DEBUG("Prepare to load ONNX and build TensorRT Engine.");
 
-        cache_path = GetCachePath(onnx_path);
+        if (is_cache) {
+            const std::string& cache_path = onnx_path;
 
-        // Try to load from cache first
-        if (cache_path.empty() || !LoadEngineFromCache(cache_path)) { // writen by ai
-            LOG_INFO("Cache not found or invalid, building engine from ONNX...");
-            LoadEngineFromOnnx();
+            if (!LoadEngineFromCache(cache_path)) {
+                LOG_INFO("Prebuilt TensorRT Engine is broken!");
+            }
+        } else {
+            std::string cache_path = GetCachePath(onnx_path);
+
+            // Try to load from cache first
+            if (cache_path.empty() || !LoadEngineFromCache(cache_path)) { // writen by ai
+                LOG_INFO("Cache not found or invalid, building engine from ONNX...");
+                LoadEngineFromOnnx(onnx_path, cache_path);
+            }
         }
 
         // Context
@@ -416,6 +443,191 @@ public:
         }
     }
 
+    // MARK: EngineNeedsPlugin Load
+    /**
+     * Engine Unnamed Network 0 has 16 I/O tensors:
+     * Tensor[0 ] (Input ) name = ao; element_size = 2; shape = (1, 1, 540, 540, );
+     * Tensor[1 ] (Input ) name = depth; element_size = 2; shape = (1, 1, 540, 540, );
+     * Tensor[2 ] (Input ) name = color; element_size = 2; shape = (1, 3, 540, 540, ); 
+     * Tensor[3 ] (Input ) name = motion; element_size = 2; shape = (1, 2, 540, 540, );
+     * Tensor[4 ] (Input ) name = temporal_ao; element_size = 2; shape = (1, 1, 540, 540, );  
+     * Tensor[5 ] (Input ) name = temporal_embed; element_size = 2; shape = (1, 32, 540, 540, );
+     * 
+     * Tensor[6 ] (Input ) name = LinalgSolve_XTX; element_size = 2; shape = (2, 540, 960, 9, );
+     * Tensor[7 ] (Input ) name = LinalgSolve_XTY; element_size = 2; shape = (2, 540, 960, 9, );
+     * Tensor[8 ] (Input ) name = GaussianBlur_Input; element_size = 2; shape = (2, 4, 68, 120, );    
+     * 
+     * Tensor[9 ] (Output) name = final_output; element_size = 2; shape = (1, 3, 1080, 1080, );
+     * Tensor[10] (Output) name = denoised; element_size = 2; shape = (1, 1, 540, 540, );    
+     * Tensor[11] (Output) name = new_temporal_ao; element_size = 2; shape = (1, 1, 540, 540, );     
+     * Tensor[12] (Output) name = new_temporal_embed; element_size = 2; shape = (1, 32, 540, 540, );
+     * Tensor[13] (Output) name = grid; element_size = 2; shape = (1, 540, 540, 2, ); 
+     * 
+     * Tensor[14] (Output) name = LinalgSolve_Output; element_size = 2; shape = (2, 540, 960, 9, );
+     * Tensor[15] (Output) name = GaussianBlur_Output; element_size = 2; shape = (2, 4, 68, 120, );  
+     */
+    void EngineNeedsPlugin_LoadTexturesToBuffers(TensorRTResource& res, uint ao_only_idx, bool is_verbose) {
+        int nbIOTensors = engine->getNbIOTensors();
+
+        for (int i = 0; i < nbIOTensors; ++i) {
+            const char* name  = engine->getIOTensorName(i);
+            Dims        shape = engine->getTensorShape(name);
+            DataType    dtype = engine->getTensorDataType(name);
+
+            // 5.1 calculate array size
+
+            // 假设 shape 格式为 [N, C, H, W]
+            int batch      = shape.d[0];
+            int channels   = shape.d[1];
+            int dst_height = shape.d[2]; // tensor 的目标高度
+            int dst_width  = shape.d[3]; // tensor 的目标宽度
+
+            // CUDA kernel 执行配置 - 基于目标尺寸
+            dim3 blockSize(16, 16);
+            dim3 gridSize(
+                (dst_width + blockSize.x - 1) / blockSize.x, (dst_height + blockSize.y - 1) / blockSize.y
+            );
+
+            /**
+             * 默认所有数据从RGBA开始填，即 depth占R；motion vector占RG
+             */
+            auto copy_to_buf = [&](CudaTexture& src_tex, int channels, __half* d_target) {
+                CudaTexture::EFormatElementType type       = src_tex.GetElementType();
+                size_t                          type_count = src_tex.GetElementTypeCount();
+
+                if (type == CudaTexture::EFormatElementType::UCHAR && type_count == 4) {
+                    Moer::Cuda::CopySurfaceToBuffer_Resize_NCHW_Half_Uchar4(
+                        gridSize,
+                        blockSize,
+                        res.semaphore.stream_to_run,
+                        // 0, // no stream object
+                        src_tex.GetSurfaceObjectList(),
+                        d_target,
+                        src_tex.width,
+                        src_tex.height,
+                        dst_width,
+                        dst_height,
+                        channels
+                    );
+                } else if (type == CudaTexture::EFormatElementType::UCHAR && type_count == 1) {
+                    Moer::Cuda::CopySurfaceToBuffer_Resize_NCHW_Half_Uchar1(
+                        gridSize,
+                        blockSize,
+                        res.semaphore.stream_to_run,
+                        // 0, // no stream object
+                        src_tex.GetSurfaceObjectList(),
+                        d_target,
+                        src_tex.width,
+                        src_tex.height,
+                        dst_width,
+                        dst_height,
+                        channels
+                    );
+                } else if (type == CudaTexture::EFormatElementType::FLOAT && type_count == 4) {
+                    Moer::Cuda::CopySurfaceToBuffer_Resize_NCHW_Half_Float4(
+                        gridSize,
+                        blockSize,
+                        res.semaphore.stream_to_run,
+                        // 0, // no stream object
+                        src_tex.GetSurfaceObjectList(),
+                        d_target,
+                        src_tex.width,
+                        src_tex.height,
+                        dst_width,
+                        dst_height,
+                        channels
+                    );
+                } else if (type == CudaTexture::EFormatElementType::FLOAT && type_count == 1) {
+                    Moer::Cuda::CopySurfaceToBuffer_Resize_NCHW_Half_Float1(
+                        gridSize,
+                        blockSize,
+                        res.semaphore.stream_to_run,
+                        // 0, // no stream object
+                        src_tex.GetSurfaceObjectList(),
+                        d_target,
+                        src_tex.width,
+                        src_tex.height,
+                        dst_width,
+                        dst_height,
+                        channels
+                    );
+                } else if (type == CudaTexture::EFormatElementType::HALF && type_count == 2) {
+                    Moer::Cuda::CopySurfaceToBuffer_Resize_NCHW_Half_Half2(
+                        gridSize,
+                        blockSize,
+                        res.semaphore.stream_to_run,
+                        // 0, // no stream object
+                        src_tex.GetSurfaceObjectList(),
+                        d_target,
+                        src_tex.width,
+                        src_tex.height,
+                        dst_width,
+                        dst_height,
+                        channels
+                    );
+                } else {
+                    assert(false);
+                }
+
+                if (is_verbose) {
+                    LOG_DEBUG(
+                        "tex {}: size from ({}, {}) to ({}, {}); channels = {}; type = {}{}",
+                        name,
+                        src_tex.width,
+                        src_tex.height,
+                        dst_width,
+                        dst_height,
+                        channels,
+                        (type == CudaTexture::EFormatElementType::FLOAT ?
+                             "float" :
+                             (type == CudaTexture::EFormatElementType::HALF ? "half" : "uchar")),
+                        type_count
+                    );
+                }
+            };
+
+            if (std::strcmp(name, "ao") == 0) {
+                copy_to_buf((ao_only_idx ? res.prev_ao : res.ao), 1, device_mem_addr_map[name]);
+
+            } else if (std::strcmp(name, "depth") == 0) {
+                copy_to_buf(res.depth, 1, device_mem_addr_map[name]);
+
+            } else if (std::strcmp(name, "color") == 0) {
+                copy_to_buf(res.color, 3, device_mem_addr_map[name]);
+
+            } else if (std::strcmp(name, "motion") == 0) {
+                copy_to_buf(res.motion, 2, device_mem_addr_map[name]);
+
+            } else if (std::strcmp(name, "temporal_ao") == 0) {
+                copy_to_buf((ao_only_idx ? res.ao : res.prev_ao), 1, device_mem_addr_map[name]);
+
+            } else if (std::strcmp(name, "temporal_embed") == 0) {
+
+                static bool isFirstTime = true;
+                if (isFirstTime) {
+                    isFirstTime = false;
+
+                    // 第一次执行，置0
+                    checkCudaErrors(cudaMemset(device_mem_addr_map[name], 0, device_mem_size_map[name]));
+
+                } else {
+
+                    // 第N次执行，设置为 out_embed
+                    checkCudaErrors(cudaMemcpy(
+                        device_mem_addr_map[name],
+                        device_mem_addr_map["new_temporal_embed"],
+                        device_mem_size_map[name],
+                        cudaMemcpyDeviceToDevice
+                    ));
+                }
+
+            } else {
+                // random value should be ok
+                // checkCudaErrors(cudaMemset(device_mem_addr_map[name], 0, device_mem_size_map[name]));
+            }
+        }
+    }
+
     void Run(const cudaStream_t& stream_to_run) {
         bool is_success = context->enqueueV3(stream_to_run);
         if (!is_success) {
@@ -498,7 +710,21 @@ private:
     }
 
     // MARK: LoadEngine ONNX
-    void LoadEngineFromOnnx() {
+    void LoadEngineFromOnnx(const std::string& onnx_path, const std::string& cache_path) {
+
+        initLibNvInferPlugins(&gLogger, "");
+
+        {
+            IPluginRegistry*         registry = getPluginRegistry();
+            IPluginCreatorInterface* creator  = registry->getCreator("LinalgSolvePlugin", "1");
+            LOG_DEBUG("LinalgSolvePlugin.1 - creator {}", (creator == nullptr ? "is nullptr" : "found"));
+        }
+        {
+            IPluginRegistry*         registry = getPluginRegistry();
+            IPluginCreatorInterface* creator  = registry->getCreator("GaussianBlurPlugin", "1");
+            LOG_DEBUG("GaussianBlurPlugin.1 - creator {}", (creator == nullptr ? "is nullptr" : "found"));
+        }
+
         // 1. Builder
         {
             builder = std::unique_ptr<IBuilder>(createInferBuilder(gLogger));
@@ -535,19 +761,76 @@ private:
                 return;
             }
         }
+        // 1.2.5 Print All Layers
+        if (false) {
+            // Print per-layer / per-tensor data types for debugging
+            auto dtypeToString = [](DataType t) {
+                switch (t) {
+                    case DataType::kFLOAT:
+                        return "kFLOAT";
+                    case DataType::kHALF:
+                        return "kHALF";
+                    case DataType::kINT8:
+                        return "kINT8";
+                    case DataType::kINT32:
+                        return "kINT32";
+                    case DataType::kINT64:
+                        return "kINT64";
+                    default:
+                        LOG_ERROR("Unknown DataType {}", static_cast<uint>(t));
+                        return "UNKNOWN";
+                }
+            };
+
+            LOG_DEBUG(
+                "Network summary: layers={} inputs={} outputs={}",
+                network->getNbLayers(),
+                network->getNbInputs(),
+                network->getNbOutputs()
+            );
+
+            // Layers: list inputs/outputs and their dtypes
+            for (int li = 0; li < network->getNbLayers(); ++li) {
+                ILayer*     layer = network->getLayer(li);
+                const char* lname = layer->getName() ? layer->getName() : "<noname>";
+                // LOG_DEBUG(
+                //     "Layer[{}] name='{}' nbInputs={} nbOutputs={}",
+                //     li,
+                //     lname,
+                //     layer->getNbInputs(),
+                //     layer->getNbOutputs()
+                // );
+
+                for (int in = 0; in < layer->getNbInputs(); ++in) {
+                    ITensor* t = layer->getInput(in);
+                    if (t) {
+                        const char* tname = t->getName() ? t->getName() : "<noname>";
+                        LOG_DEBUG("  input[{}] name='{}' dtype={}", in, tname, dtypeToString(t->getType()));
+                    }
+                }
+                for (int out = 0; out < layer->getNbOutputs(); ++out) {
+                    ITensor* t = layer->getOutput(out);
+                    if (t) {
+                        const char* tname = t->getName() ? t->getName() : "<noname>";
+                        LOG_DEBUG("  output[{}] name='{}' dtype={}", out, tname, dtypeToString(t->getType()));
+                    }
+                }
+            }
+
+            // Network-level inputs/outputs
+            for (int i = 0; i < network->getNbInputs(); ++i) {
+                ITensor*    t     = network->getInput(i);
+                const char* tname = t->getName() ? t->getName() : "<noname>";
+                LOG_DEBUG("NetworkInput[{}] name='{}' dtype={}", i, tname, dtypeToString(t->getType()));
+            }
+            for (int i = 0; i < network->getNbOutputs(); ++i) {
+                ITensor*    t     = network->getOutput(i);
+                const char* tname = t->getName() ? t->getName() : "<noname>";
+                LOG_DEBUG("NetworkOutput[{}] name='{}' dtype={}", i, tname, dtypeToString(t->getType()));
+            }
+        }
         // 1.3 Convert to FP16
         {
-            // // 设置网络默认精度为 FP16
-            // for (int i = 0; i < network->getNbLayers(); i++) {
-            //     auto* layer = network->getLayer(i);
-            //     layer->setPrecision(DataType::kHALF);
-
-            //     // 强制所有输出为 FP16
-            //     for (int j = 0; j < layer->getNbOutputs(); j++) {
-            //         layer->getOutput(j)->setType(DataType::kHALF);
-            //     }
-            // }
-
             // 设置输入精度
             for (int i = 0; i < network->getNbInputs(); i++) {
                 network->getInput(i)->setType(DataType::kHALF);
@@ -566,6 +849,107 @@ private:
             );
         }
 
+        // MARK: LinalgSolvePlugin
+        {
+            nvinfer1::IPluginRegistry* registry = getPluginRegistry();
+            auto                       creator  = registry->getPluginCreator("LinalgSolvePlugin", "1");
+            if (!creator) {
+                LOG_ERROR("Cannot find LinalgSolvePluginCreator");
+                return;
+            }
+            LOG_DEBUG("Found plugin creator: {}", creator->getPluginName());
+
+            int   B = 2, H = 540, W = 960, Q_plus_1 = 3, C = 3;
+            float epsilon = 0.01f;
+            float eta     = 0.001f;
+
+            // 2. 设置 Plugin 参数
+            int         q_val = Q_plus_1;
+            PluginField fields[3];
+            fields[0].name   = "q_plus_one";
+            fields[0].data   = &q_val;
+            fields[0].type   = PluginFieldType::kINT32;
+            fields[0].length = 1;
+
+            fields[1].name   = "epsilon";
+            fields[1].data   = &epsilon;
+            fields[1].type   = PluginFieldType::kFLOAT32;
+            fields[1].length = 1;
+
+            fields[2].name   = "eta";
+            fields[2].data   = &eta;
+            fields[2].type   = PluginFieldType::kFLOAT32;
+            fields[2].length = 1;
+
+            PluginFieldCollection fc;
+            fc.nbFields = 3;
+            fc.fields   = fields;
+
+            IPluginV2* plugin = creator->createPlugin("LinalgSolve", &fc);
+            LOG_DEBUG("Created plugin instance: {}", creator->getPluginName());
+
+            // 4. 输入定义
+            Dims XTX_shape{4, {B, H, W, Q_plus_1 * Q_plus_1}};
+            Dims XTY_shape{4, {B, H, W, Q_plus_1 * C}};
+
+            // ITensor* input_XTX = network->addInput("LinalgSolve_XTX", DataType::kFLOAT, XTX_shape);
+            // ITensor* input_XTY = network->addInput("LinalgSolve_XTY", DataType::kFLOAT, XTY_shape);
+            ITensor* input_XTX = network->addInput("LinalgSolve_XTX", DataType::kHALF, XTX_shape);
+            ITensor* input_XTY = network->addInput("LinalgSolve_XTY", DataType::kHALF, XTY_shape);
+
+            // 5. 插入 Plugin
+            ITensor* plugin_inputs[] = {input_XTX, input_XTY};
+            ILayer*  linalg_layer    = network->addPluginV2(plugin_inputs, 2, *plugin);
+
+            // 6. 标记输出
+            auto* output_layer = linalg_layer->getOutput(0);
+            output_layer->setName("LinalgSolve_Output");
+            output_layer->setType(DataType::kHALF);
+            network->markOutput(*output_layer);
+        }
+        // MARK: GaussianBlurPlugin
+        {
+            nvinfer1::IPluginRegistry* registry = getPluginRegistry();
+            auto                       creator  = registry->getPluginCreator("GaussianBlurPlugin", "1");
+            if (!creator) {
+                LOG_ERROR("Cannot find GaussianBlurPluginCreator");
+                return;
+            }
+            LOG_DEBUG("Found plugin creator: {}", creator->getPluginName());
+
+            int   B = 2, C = 4, H = 68, W = 120;
+            float sigma = 1.5f;
+
+            // 2. 设置 Plugin 参数 (sigma)
+            PluginField fields[1];
+            fields[0].name   = "sigma";
+            fields[0].data   = &sigma;
+            fields[0].type   = PluginFieldType::kFLOAT32;
+            fields[0].length = 1;
+
+            PluginFieldCollection fc;
+            fc.nbFields = 1;
+            fc.fields   = fields;
+
+            IPluginV2* plugin = creator->createPlugin("GaussianBlur", &fc);
+            LOG_DEBUG("Created plugin instance: {}. Sigma: {}", creator->getPluginName(), sigma);
+
+            // 4. 定义网络输入 (NCHW)
+            Dims input_dims{4, {B, C, H, W}};
+            // ITensor* input_tensor = network->addInput("GaussianBlur_Input", DataType::kFLOAT, input_dims);
+            ITensor* input_tensor = network->addInput("GaussianBlur_Input", DataType::kHALF, input_dims);
+
+            // 5. 插入 Plugin
+            ITensor* plugin_inputs[] = {input_tensor};
+            ILayer*  gaussian_layer  = network->addPluginV2(plugin_inputs, 1, *plugin);
+
+            // 6. 标记输出
+            auto* output_layer = gaussian_layer->getOutput(0);
+            output_layer->setName("GaussianBlur_Output");
+            output_layer->setType(DataType::kHALF);
+            network->markOutput(*output_layer);
+        }
+
         // 2. Config
         config = std::unique_ptr<IBuilderConfig>(builder->createBuilderConfig());
         config->setMemoryPoolLimit(MemoryPoolType::kWORKSPACE, 1ULL << 30); // 1GB
@@ -573,18 +957,25 @@ private:
         // 可选的构建优化
         config->setBuilderOptimizationLevel(3); // 默认级别
 
-        // 强制fp16
-        // trt10.12废弃的方法，但是简单
+        // // 强制fp16
+        // // trt10.12废弃的方法，但是简单
+        // {
+        //     config->setFlag(BuilderFlag::kFP16);
+        //     config->setFlag(BuilderFlag::kOBEY_PRECISION_CONSTRAINTS);
+        // }
+
+        // cublas，设置 tactic source
         {
-            config->setFlag(BuilderFlag::kFP16);
-            config->setFlag(BuilderFlag::kOBEY_PRECISION_CONSTRAINTS);
+            config->setTacticSources(
+                config->getTacticSources() | (1 << static_cast<int>(TacticSource::kCUBLAS))
+            );
         }
 
         auto profile = builder->createOptimizationProfile();
         config->addOptimizationProfile(profile);
 
         // 3. Engine
-        LOG_DEBUG("Started to Build TensorRT ICudaEngine.");
+        LOG_DEBUG("Started to Build TensorRT ICudaEngine. Needs to wait several minutes.");
 
         engine = std::unique_ptr<ICudaEngine>(builder->buildEngineWithConfig(*network, *config));
         if (!engine) {
@@ -661,10 +1052,11 @@ private:
                           << "; element_size = " << element_size << "; shape = (";
             for (int i = 0; i < shape.nbDims; i++)
                 output_stream << shape.d[i] << ", ";
-            output_stream << ");\t";
+            output_stream << ");";
 
-            output_stream << "buffer length = " << element_count << ";\tbuffer size = " << total_bytes / 1024
-                          << "KB\n";
+            // output_stream << "\tbuffer length = " << element_count << ";\tbuffer size = " << total_bytes / 1024
+            //               << "KB";
+            output_stream << "\n";
         };
 
         std::vector<const char*> input_tensors;
@@ -698,9 +1090,7 @@ private:
 };
 
 /**
- * MARK: CUDA Pass
- * 
- * Reference: https://github.com/NVIDIA/cuda-samples/tree/master/Samples/5_Domain_Specific/vulkanImageCUDA
+ * MARK: TensorRT Pass
  */
 class TensorRTPass {
 
@@ -708,8 +1098,7 @@ private:
     RasterContext& context;
 
     UniquePtr<TensorRTResource> res;
-    UniquePtr<TensorRTEngine>   engine1;
-    UniquePtr<TensorRTEngine>   engine2;
+    UniquePtr<TensorRTEngine>   engine_needs_plugin;
 
     cusolverDnHandle_t cusolver = nullptr;
 
@@ -729,17 +1118,13 @@ public:
 
         res = MakeUnique<TensorRTResource>(context, ao_tex, depth_tex, color_tex, motion_tex, prev_ao_tex);
 
-        engine1 = MakeUnique<TensorRTEngine>((ConfigManager::GetInstance().GetEditorResourcePath() / "ai" /
-                                              "onnx_models" / "model4_part1.onnx")
-                                                 .string());
-
-        engine2 = MakeUnique<TensorRTEngine>((ConfigManager::GetInstance().GetEditorResourcePath() / "ai" /
-                                              "onnx_models" / "model4_part3.onnx")
-                                                 .string());
+        engine_needs_plugin = MakeUnique<TensorRTEngine>(
+            (ConfigManager::GetInstance().GetEditorResourcePath() / "ai" / "onnx_models" / "flnr41103.onnx")
+                .string()
+        );
     }
     ~TensorRTPass() {
-        engine2.reset();
-        engine1.reset();
+        engine_needs_plugin.reset();
         res.reset();
         cusolverDnDestroy(cusolver);
     }
@@ -758,39 +1143,6 @@ public:
         res.reset();
     }
 
-    /**
-
-        Engine Unnamed Network 0 has 14 I/O tensors:
-
-        Tensor[0]  (Input ) name = in_ao;              element_size = 2; shape = (1, 1, 540, 960, );   buffer length = 518400;   buffer size = 1012KB
-        Tensor[1]  (Input ) name = in_depth;           element_size = 2; shape = (1, 1, 540, 960, );   buffer length = 518400;   buffer size = 1012KB
-        Tensor[2]  (Input ) name = in_color;           element_size = 2; shape = (1, 3, 540, 960, );   buffer length = 1555200;  buffer size = 3037KB
-        Tensor[3]  (Input ) name = in_motion;          element_size = 2; shape = (1, 2, 540, 960, );   buffer length = 1036800;  buffer size = 2025KB
-        Tensor[4]  (Input ) name = in_prev_ao;         element_size = 2; shape = (1, 1, 540, 960, );   buffer length = 518400;   buffer size = 1012KB
-        Tensor[5]  (Input ) name = in_prev_embed;      element_size = 2; shape = (1, 32, 540, 960, );  buffer length = 16588800; buffer size = 32400KB
-
-        Tensor[6]  (Output) name = out_XTX_batch;      element_size = 2; shape = (8040, 4, 4, );       buffer length = 128640;   buffer size = 251KB
-        Tensor[7]  (Output) name = out_XTY_batch;      element_size = 2; shape = (8040, 4, 1, );       buffer length = 32160;    buffer size = 62KB
-        Tensor[8]  (Output) name = out_X_model;        element_size = 2; shape = (1, 3, 540, 960, );   buffer length = 1555200;  buffer size = 3037KB
-        Tensor[9]  (Output) name = out_ao;             element_size = 2; shape = (1, 1, 540, 960, );   buffer length = 518400;   buffer size = 1012KB
-        Tensor[10] (Output) name = out_upscale_kernel; element_size = 2; shape = (1, 16, 540, 960, );  uffer length = 8294400;   buffer size = 16200KB
-        Tensor[11] (Output) name = out_color;          element_size = 2; shape = (1, 3, 540, 960, );   buffer length = 1555200;  buffer size = 3037KB
-        Tensor[12] (Output) name = out_prev_ao;        element_size = 2; shape = (1, 1, 540, 960, );   buffer length = 518400;   buffer size = 1012KB
-        Tensor[13] (Output) name = out_embed;          element_size = 2; shape = (1, 32, 540, 960, );  buffer length = 16588800; buffer size = 32400KB
-
-        Engine Unnamed Network 0 has 7 I/O tensors:
-
-        Tensor[0] (Input )  name = in_X_model;         element_size = 2; shape = (1, 3, 540, 960, );   buffer length = 1555200; buffer size = 3037KB
-        Tensor[1] (Input )  name = in_coeffs_batch;    element_size = 2; shape = (8040, 4, 1, );       buffer length = 32160;   buffer size = 62KB
-        Tensor[2] (Input )  name = in_upscale_kernel;  element_size = 2; shape = (1, 16, 540, 960, );  buffer length = 8294400; buffer size = 16200KB
-        Tensor[3] (Input )  name = in_color;           element_size = 2; shape = (1, 3, 540, 960, );   buffer length = 1555200; buffer size = 3037KB
-        Tensor[4] (Input )  name = in_prev_ao;         element_size = 2; shape = (1, 1, 540, 960, );   buffer length = 518400;  buffer size = 1012KB
-
-        Tensor[5] (Output)  name = out_final_output;   element_size = 2; shape = (1, 3, 1080, 1920, ); buffer length = 6220800; buffer size = 12150KB
-        Tensor[6] (Output)  name = out_denoised_ao;    element_size = 2; shape = (1, 1, 540, 960, );   buffer length = 518400;  buffer size = 1012KB
-
-    */
-
     uint Process(RasterContext& context, const RasterConfig& ui_config, uint input_image, uint ao_only_idx) {
         assert(ui_config.ai_is_cuda_enabled);
 
@@ -807,24 +1159,18 @@ public:
 
         // engine1->LoadRandomValueToBuffers(*res);
         // engine1->LoadZeroToBuffers();
-        engine1->Engine1_LoadTexturesToBuffers(*res, ao_only_idx, false);
+        engine_needs_plugin->EngineNeedsPlugin_LoadTexturesToBuffers(*res, ao_only_idx, false);
         sync();
 
-        engine1->Run(res->semaphore.stream_to_run);
-        sync();
-
-        engine2->Engine2_LoadEngine1OutputToBuffers(res->semaphore.stream_to_run, *engine1, cusolver);
-        sync();
-
-        engine2->Run(res->semaphore.stream_to_run);
+        engine_needs_plugin->Run(res->semaphore.stream_to_run);
         sync();
 
         // CheckBuf();
 
         VisualizeFeature(
-            (ui_config.ai_trt_visualize_buffer.starts_with("Engine1") ? *engine1 : *engine2),
+            *engine_needs_plugin,
             res->color,
-            ui_config.ai_trt_visualize_buffer.substr(8).c_str(),
+            ui_config.ai_trt_visualize_buffer.c_str(),
             res->semaphore.stream_to_run,
             ui_config.ai_cuda_pass_debug_param
         );
@@ -927,37 +1273,20 @@ private:
         };
 
         LOG_DEBUG("");
-        LOG_DEBUG("Engine 1 Input:");
-        check_buf(*engine1, "in_ao");
-        check_buf(*engine1, "in_depth");
-        check_buf(*engine1, "in_color");
-        check_buf(*engine1, "in_motion");
-        check_buf(*engine1, "in_prev_ao");
-        check_buf(*engine1, "in_prev_embed");
+        LOG_DEBUG("Input:");
+        check_buf(*engine_needs_plugin, "ao");
+        check_buf(*engine_needs_plugin, "depth");
+        check_buf(*engine_needs_plugin, "color");
+        check_buf(*engine_needs_plugin, "motion");
+        check_buf(*engine_needs_plugin, "temporal_ao");
+        check_buf(*engine_needs_plugin, "temporal_embed");
 
         LOG_DEBUG("");
-        LOG_DEBUG("Engine 1 Output:");
-        check_buf(*engine1, "out_XTX_batch");
-        check_buf(*engine1, "out_XTY_batch");
-        check_buf(*engine1, "out_X_model");
-        check_buf(*engine1, "out_ao");
-        check_buf(*engine1, "out_upscale_kernel");
-        check_buf(*engine1, "out_color");
-        check_buf(*engine1, "out_prev_ao");
-        check_buf(*engine1, "out_embed");
-
-        LOG_DEBUG("");
-        LOG_DEBUG("Engine 2 Input:");
-        check_buf(*engine2, "in_X_model");
-        check_buf(*engine2, "in_coeffs_batch");
-        check_buf(*engine2, "in_upscale_kernel");
-        check_buf(*engine2, "in_color");
-        check_buf(*engine2, "in_prev_ao");
-
-        LOG_DEBUG("");
-        LOG_DEBUG("Engine 2 Output:");
-        check_buf(*engine2, "out_final_output");
-        check_buf(*engine2, "out_denoised_ao");
+        LOG_DEBUG("Output:");
+        check_buf(*engine_needs_plugin, "final_output");
+        check_buf(*engine_needs_plugin, "denoised");
+        check_buf(*engine_needs_plugin, "new_temporal_ao");
+        check_buf(*engine_needs_plugin, "new_temporal_embed");
 
         LOG_DEBUG("");
         LOG_DEBUG("");
