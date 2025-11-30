@@ -138,6 +138,6 @@ add_custom_target(
     COMMENT "Copying resources to ${output_dir}/asset"
 )
 
-# add_dependencies(${target_name} CopyResources)
+add_dependencies(${target_name} CopyResources)
 
 

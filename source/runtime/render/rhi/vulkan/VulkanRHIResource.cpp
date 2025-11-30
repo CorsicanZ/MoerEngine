@@ -1624,6 +1624,7 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
     }
 
     VkImageView VulkanTexture::GetView(uint _mip_level, uint _mip_cnt) {
+        //TODO: should support specific array layer view?
         uint key = EncodeViewKey(_mip_level, _mip_cnt);
         auto it  = m_views.find(key);
         if (it != m_views.end()) { return it->second; }

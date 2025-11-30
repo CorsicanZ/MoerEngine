@@ -57,7 +57,7 @@ void EditorUI::InitFromConfigManager() {
 
 void EditorUI::TickUI() {
 
-    m_config->aspect_ratio = m_scene_color_resolution.x / m_scene_color_resolution.y;
+    m_config->aspect_ratio = (m_scene_color_resolution.x + EPS) / (m_scene_color_resolution.y + EPS);
 
     m_ui_renderer->BeginGUIFrame();
 
