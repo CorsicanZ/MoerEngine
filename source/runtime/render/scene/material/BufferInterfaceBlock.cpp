@@ -1,4 +1,4 @@
-#include "scene/BufferInterfaceBlock.h"
+#include "scene/material/BufferInterfaceBlock.h"
 
 #include "log/LogSystem.h"
 #include "math/Base.h"

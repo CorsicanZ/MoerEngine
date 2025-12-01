@@ -7,11 +7,9 @@
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
 #include "scene/Entity.h"
-#include "scene/MaterialInstance.h"
-#include "scene/RenderableManager.h"
 #include "scene/Scene.h"
 #include "scene/light/LightComponent.h"
-#include "scene/light/LightComponentManager.h"
+#include "scene/material/MaterialInstance.h"
 #include "shader/ShaderResourceManager.h"
 #include "shaderheaders/shared/lighting/ShaderParameters.h"
 #include "taskgraph/TaskGraph.h"
@@ -57,7 +55,7 @@ PrepareLightPass::PrepareLightPass(RenderDevice& _device, ShaderManager& _manage
 void PrepareLightPass::CountEmissiveInstances(uint& _num_emissive_meshes, uint& _num_emissive_triangles) {
     _num_emissive_meshes    = 0;
     _num_emissive_triangles = 0;
-    scene.ForEach([&](Entity _entity) {
+    scene.ForEach([&](ECS::Entity _entity) {
         const MeshInfo&                mesh_info     = *RenderableManager::Get().GetMeshInfo(_entity);
         std::span<MaterialInstanceRef> mat_instances = RenderableManager::Get().GetMaterialInstances(_entity);
         for (uint i = 0; i < mesh_info.geometries.size(); ++i) {

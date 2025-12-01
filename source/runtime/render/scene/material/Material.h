@@ -2,9 +2,10 @@
 #include "BufferInterfaceBlock.h"
 #include "TextureInterfaceBlock.h"
 #include "misc/CountableRef.h"
+#include "misc/Singleton.h"
 #include "rhi/RHIResource.h"
 
-#include "scene/MaterialInstance.h"
+#include "MaterialInstance.h"
 // Add the above line to fix: CountableRef.h(120,13): error C2027: 使用了未定义类型“Moer::MaterialInstance”
 
 namespace Moer {
@@ -25,7 +26,7 @@ struct [[deprecated("ECS: PackedMaterialData is not used yet")]] PackedMaterialD
     float4 packed_7;
 };
 
-enum class EMaterialType : uint32_t {
+enum class EMaterialType : uint8 {
     E_PBR_STANDARD,
     E_HAIR,
     E_CLOTH,
@@ -34,17 +35,20 @@ enum class EMaterialType : uint32_t {
 
 class RENDER_API Material : public CountableResource {
 public:
-    static constexpr uint32_t MaterialBytesNum = 512;
-    const std::string&        GetName() const noexcept;
-    void                      SetName(const std::string& name) noexcept;
-    MaterialInstanceRef       CreateInstance();
-    void SetSamplerInterfaceBlock(TextureInterfaceBlock& sampler_interface_block) noexcept;
+    Material();
+    ~Material();
+
+    const std::string&  GetName() const noexcept;
+    void                SetName(const std::string& name) noexcept;
+    MaterialInstanceRef CreateInstance();
+    void                SetSamplerInterfaceBlock(TextureInterfaceBlock& sampler_interface_block) noexcept;
     const TextureInterfaceBlock& GetSamplerInterfaceBlock() const noexcept;
     void SetBufferInterfaceBlock(BufferInterfaceBlock& buffer_interface_block) noexcept;
     const BufferInterfaceBlock& GetBufferInterfaceBlock() const noexcept;
     EMaterialType               GetType() const noexcept;
     void                        SetType(EMaterialType type) noexcept;
-    Material();
+
+    COUNTABLE_DESTROY
 
 protected:
     class Impl;
@@ -495,16 +499,13 @@ protected:
     EMaterialType m_material_type{EMaterialType::E_PBR_STANDARD};
 };
 
-class MaterialFactory {
+class MaterialFactory : public Singleton<MaterialFactory> {
 public:
     RENDER_API MaterialFactory();
 
-    template<typename... TMaterialArgs>
-    RENDER_API MaterialInstanceRef CreateMaterialInstance(
-        const EMaterialType _type,
-        std::string_view    _name,
-        TMaterialArgs&&... _material_args
-    ) noexcept;
+    template<typename T>
+        requires std::derived_from<T, Material>
+    RENDER_API MaterialInstanceRef CreateMaterialInstance(std::string_view _name);
 
 private:
     Array<MaterialRef> m_materials;

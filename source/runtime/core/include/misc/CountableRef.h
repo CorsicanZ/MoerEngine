@@ -1,12 +1,10 @@
-//
-// Created by 17152 on 2023/9/16.
-//
-
 #ifndef MOERENGINE_COUNTABLEREF_H
 #define MOERENGINE_COUNTABLEREF_H
+
 #include <atomic>
 #include <cassert>
 #include <type_traits>
+
 template<typename TCountable>
 concept concept_is_countable = requires(TCountable t) {
     t.AddRef() + (uint32_t)1;
@@ -67,11 +65,14 @@ protected:
         m_counter.store(_count);                  \
     }
 
+#define COUNTABLE_DESTROY   \
+    inline void Destroy() { \
+        MoerDelete(this);   \
+    }
+
 #define COUNTABLE_IMPLEMENTATION_AUTO_DESTROY \
     COUNTABLE_IMPLEMENTATION                  \
-    inline void Destroy() {                   \
-        MoerDelete(this);                     \
-    }
+    COUNTABLE_DESTROY
 
 template<typename T>
 class CountableRef {
@@ -207,12 +208,6 @@ public:
         return ptr->GetRefCount();
     }
 
-    T* Release() {
-        T* old = ptr;
-        ptr    = nullptr;
-        return old;
-    }
-
 protected:
     T* ptr;
     template<typename OtherType>
@@ -254,9 +249,7 @@ public:
         }
     }
 
-protected:
 private:
-    void Destroy() {}
     struct ResourceAtomicFlags {
         std::atomic<uint32_t> packed;
 
@@ -272,6 +265,7 @@ private:
             assert(num_ref < s_mark_for_delete_mask);
             return num_ref;
         }
+
         int32_t DeRef(std::memory_order memory_order) {
             uint32_t current_packed = packed.fetch_sub(1, memory_order);
             assert((current_packed & s_is_deleting_mask) == 0 && "resource is deleting");
@@ -279,6 +273,7 @@ private:
             assert(num_ref >= 0);
             return num_ref;
         }
+
         bool MarkToDelete(std::memory_order memory_order) {
             uint32_t current_packed = packed.fetch_or(s_mark_for_delete_mask, memory_order);
             assert((current_packed & s_is_deleting_mask) == 0 && "resource is deleting");
@@ -292,6 +287,7 @@ private:
             assert(current_mark_for_delete && "resource is not marked for deleting");
             return current_mark_for_delete;
         }
+
         bool IsDeleting() {
             /* make sure packed data processing sequence handled correctly - acquire-rel */
             uint32_t current_packed = packed.load(std::memory_order_acquire);
@@ -304,6 +300,7 @@ private:
             UnMarkToDelete(std::memory_order_release);
             return false;
         }
+
         bool IsValid(std::memory_order memory_order) {
             uint32_t current_packed = packed.load(memory_order);
             return (current_packed & s_mark_for_delete_mask) == 0 && (current_packed & s_ref_count_mask) > 0;
@@ -319,4 +316,5 @@ private:
     //for const resource state change
     mutable ResourceAtomicFlags flags;
 };
+
 #endif //MOERENGINE_COUNTABLEREF_H

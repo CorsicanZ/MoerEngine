@@ -200,3 +200,16 @@ if (TARGET TensorRT)
     )
     set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 endif()
+
+# SceneTest
+add_executable(SceneTest SceneTest.cpp)
+target_include_directories(SceneTest
+        PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime>
+        PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/core/include>
+        PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/render>
+        PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/resource>
+)
+target_link_libraries(SceneTest
+        PRIVATE Moer::Runtime
+)
+set_target_properties(SceneTest PROPERTIES FOLDER ${moer_test_folder})

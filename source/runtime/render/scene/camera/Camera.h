@@ -1,4 +1,5 @@
 #pragma once
+
 #include "RenderAPI.h"
 #include "math/Math.h"
 #include "math/Transform.h"
@@ -38,6 +39,8 @@ public:
     const static float k_camera_speed_down_delta;
 
     Camera() noexcept;
+
+    COUNTABLE_DESTROY
 
     // MARK: Getter
 

@@ -3,14 +3,17 @@
 #include "misc/STL.h"
 #include "resources/GpuScene.h"
 #include "rhi/RHI.h"
-#include "scene/CameraManager.h"
-#include "scene/EntityManager.h"
+#include "scene/Entity.h"
+#include "scene/camera/CameraComponent.h"
 
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
 #include <string>
+
 namespace Moer::Resource {
+
+using namespace Moer::ECS;
 struct PlyProperty {
     std::string type;
     std::string name;
@@ -139,24 +142,24 @@ void PlyLoader::Impl::load() {
         assert(vertexStorage.normal.z == 0.0f);
     }
     Scene* scene = m_scene.get();
-    // EnqueueRenderTask([scene, verteces = std::move(verteces)]() {
-    //     auto gs_vertex_buffer = GpuSceneBufferBuilder::CopyFrom(EBufferUsageFlags::UNORDERED_ACCESS, verteces.data(), verteces.size() * sizeof(Vertex));
-    //     assert(false && "Not implemented");
-    //     // scene->SetBuffer("gs_scene_buffer", gs_vertex_buffer);
-    // });
-    auto      camera_entity = EntityManager::Get().Create();
-    auto      camera        = CameraManager::Get().Create(camera_entity);
-    Transform world_transform(Vector3f(0, 0, 5), Vector3f(1), Quaternion(1, 0, 0, 0));
-    float     tan_fovx = std::tan(Angle::DegreeToRadian(45.f) / 2.0);
-    float     tan_fovy = tan_fovx * 1080.f / 1920.f;
-    camera->Initialize(
-        world_transform,
-        Angle::RadianToDegree(std::atan(tan_fovy) * 2.0f),
-        1920.f / 1080.f,
-        0.1f,
-        1000.0f // default value, identical with gltf parser
-    );
-    m_scene->AddCamera(camera_entity);
+    EnqueueRenderTask([scene, verteces = std::move(verteces)]() {
+        // auto gs_vertex_buffer = GpuSceneBufferBuilder::CopyFrom(EBufferUsageFlags::UNORDERED_ACCESS, verteces.data(), verteces.size() * sizeof(Vertex));
+        assert(false && "Not implemented");
+        // scene->SetBuffer("gs_scene_buffer", gs_vertex_buffer);
+    });
+    // auto      camera_entity = EntityManager::Get().Create();
+    // auto      camera        = CameraManager::Get().Create(camera_entity);
+    // Transform world_transform(Vector3f(0, 0, 5), Vector3f(1), Quaternion(1, 0, 0, 0));
+    // float     tan_fovx = std::tan(Angle::DegreeToRadian(45.f) / 2.0);
+    // float     tan_fovy = tan_fovx * 1080.f / 1920.f;
+    // camera->Initialize(
+    //     world_transform,
+    //     Angle::RadianToDegree(std::atan(tan_fovy) * 2.0f),
+    //     1920.f / 1080.f,
+    //     0.1f,
+    //     1000.0f// default value, identical with gltf parser
+    // );
+    // m_scene->AddCamera(camera_entity);
     precomputeCov3D();
 }
 

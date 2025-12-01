@@ -3,10 +3,8 @@
 #include "rhi/RHICommon.h"
 #include "serialize/Serializer.h"
 
-namespace Moer {
+namespace Moer::ECS {
 class SceneCache;
-}
-namespace Moer {
 
 class TextureInterfaceBlock {
 public:
@@ -59,4 +57,4 @@ private:
     std::string                        m_name;
 };
 
-} // namespace Moer
+} // namespace Moer::ECS
