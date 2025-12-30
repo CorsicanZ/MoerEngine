@@ -1,19 +1,21 @@
 #pragma once
 #include "Component.h"
 #include "Entity.h"
+#include "TextureLibrary.h"
 #include "misc/CountableRef.h"
 #include "misc/STL.h"
 #include "rhi/RHIResource.h"
 #include "scene/camera/CameraComponent.h"
 #include "scene/instance/MeshInstanceComponent.h"
 #include "scene/light/LightComponent.h"
+#include "scene/material/MaterialComponent.h"
 #include "scene/mesh/MeshComponent.h"
 #include "scene/transform/TransformComponent.h"
 #include "serialize/Serializer.h"
 #include "shaderheaders/shared/Geometry.h"
 
 namespace Moer {
-using namespace ECS;
+using namespace Moer::ECS;
 
 enum EGpuSceneResource : uint8 {
     VertexBuffer,
@@ -102,6 +104,7 @@ public:
 protected:
     UnorderedMap<Entity, Array<Entity>> m_topdown_hierarchy;
     ComponentLibrary                    m_component_library;
+    TextureLibrary                      m_texture_library;
 
 public:
     Render::BindlessArrayRef bindless_array;
@@ -122,7 +125,8 @@ public:
         m_component_library.Register<MeshComponent>("Scene::MeshComponents");
     ComponentManager<MeshInstanceComponent>& mesh_instances =
         m_component_library.Register<MeshInstanceComponent>("Scene::MeshInstanceComponents");
-    // ECS::ComponentManager<MaterialComponent>&  materials  = m_component_library.Register<MaterialComponent>("Scene::MaterialComponents");
+    ComponentManager<MaterialComponent>& materials =
+        m_component_library.Register<MaterialComponent>("Scene::MaterialComponents");
 
 public:
     void Info();

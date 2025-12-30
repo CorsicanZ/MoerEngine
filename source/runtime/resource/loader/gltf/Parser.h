@@ -13,7 +13,7 @@ public:
     ~Parser() noexcept;
 
     static RESOURCE_API bool
-    LoadSceneFromFile(const std::filesystem::path& _file_path, ECS::Scene& _scene) noexcept;
+    LoadSceneFromFile(const std::filesystem::path& _file_path, Scene& _scene) noexcept;
 
 private:
     struct Impl;

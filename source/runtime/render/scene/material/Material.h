@@ -9,10 +9,32 @@
 // Add the above line to fix: CountableRef.h(120,13): error C2027: 使用了未定义类型“Moer::MaterialInstance”
 
 namespace Moer {
-class TextureInterfaceBlock;
-class MaterialInstance;
-using MaterialInstanceRef = CountableRef<MaterialInstance>;
-class BufferInterfaceBlock;
+
+enum class EMaterialFlags : uint16 {
+    NONE            = 0,
+    DIRTY           = 1 << 0,
+    TWO_SIDED       = 1 << 1,
+    CAST_SHADOW     = 1 << 2,
+    USE_VERTEXCOLOR = 1 << 3,
+    USE_WPO         = 1 << 4,
+    OUTLINE         = 1 << 5,
+    // ...
+};
+
+enum class EMaterialType : uint8 {
+    LIT,
+    UNLIT,
+    SUBSURFACE,
+    CLOTH,
+    TYPE_NUM
+};
+
+enum class EMaterialBlendMode : uint8 {
+    OPAQUE,
+    MASKED,
+    TRANSLUCENT,
+    MODE_NUM
+};
 
 struct [[deprecated("ECS: PackedMaterialData is not used yet")]] PackedMaterialData {
     float4 packed_0;
@@ -26,33 +48,20 @@ struct [[deprecated("ECS: PackedMaterialData is not used yet")]] PackedMaterialD
     float4 packed_7;
 };
 
-enum class EMaterialType : uint8 {
-    E_PBR_STANDARD,
-    E_HAIR,
-    E_CLOTH,
-    E_MATERIAL_NUM
-};
-
 class RENDER_API Material : public CountableResource {
 public:
     Material();
     ~Material();
 
-    const std::string&  GetName() const noexcept;
-    void                SetName(const std::string& name) noexcept;
-    MaterialInstanceRef CreateInstance();
-    void                SetSamplerInterfaceBlock(TextureInterfaceBlock& sampler_interface_block) noexcept;
-    const TextureInterfaceBlock& GetSamplerInterfaceBlock() const noexcept;
-    void SetBufferInterfaceBlock(BufferInterfaceBlock& buffer_interface_block) noexcept;
-    const BufferInterfaceBlock& GetBufferInterfaceBlock() const noexcept;
-    EMaterialType               GetType() const noexcept;
-    void                        SetType(EMaterialType type) noexcept;
-
-    COUNTABLE_DESTROY
+    friend class MaterialComponent;
 
 protected:
-    class Impl;
-    Impl* m_impl;
+    std::string        name;
+    EMaterialFlags     flags      = EMaterialFlags::CAST_SHADOW;
+    EMaterialType      type       = EMaterialType::LIT;
+    EMaterialBlendMode blend_mode = EMaterialBlendMode::OPAQUE;
+
+    COUNTABLE_DESTROY
 };
 
 struct [[deprecated("ECS: MaterialComponent is not used yet")]] MaterialComponent {

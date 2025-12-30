@@ -524,6 +524,7 @@ struct NameComponent {
     // void Serialize(wi::Archive& archive, wi::ecs::EntitySerializer& seri);
 };
 
+// Component layer mask for enabling/disabling rendering or other operations on entities
 struct LayerComponent {
     uint32_t layer_mask = ~0u;
 

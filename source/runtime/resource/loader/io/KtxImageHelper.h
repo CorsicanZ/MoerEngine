@@ -4,7 +4,7 @@
 
 #include <ktx.h>
 
-namespace Moer {
+namespace Moer::Resource {
 class KtxImageHelper {
 public:
     static EPixelFormat GetFormatFromOpenGLInternalFormat(const GLenum intername_foramt);
@@ -14,4 +14,4 @@ public:
 protected:
     static void Decode(ImageReadDesc& desc, Vector3i block_dim);
 };
-} // namespace Moer
+} // namespace Moer::Resource

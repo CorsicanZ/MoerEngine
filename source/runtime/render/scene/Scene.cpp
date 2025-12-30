@@ -9,7 +9,7 @@
 #include "scene/transform/TransformComponent.h"
 #include <atomic>
 
-namespace Moer::ECS {
+namespace Moer {
 using ECS::ComponentLibrary;
 using ECS::ComponentManager;
 using ECS::Entity;
@@ -99,8 +99,7 @@ Entity Scene::AddMaterial(std::string_view _name) {
     auto entity = ECS::CreateEntity();
 
     names.Create(entity) = _name.data();
-
-    //TODO: add other components maybe
+    materials.Create(entity);
 
     return entity;
 }
@@ -585,4 +584,4 @@ Scene* AsyncSceneLoadInfo::TryGetScene() {
     return nullptr;
 }
 
-} // namespace Moer::ECS
+} // namespace Moer

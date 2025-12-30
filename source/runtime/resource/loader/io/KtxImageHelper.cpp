@@ -7,7 +7,7 @@
 #include <ktx.h>
 #include <mutex>
 
-namespace Moer {
+namespace Moer::Resource {
 EPixelFormat KtxImageHelper::GetFormatFromOpenGLInternalFormat(const GLenum intername_foramt) {
     switch (intername_foramt) {
         //
@@ -606,4 +606,4 @@ void KtxImageHelper::Decode(ImageReadDesc& desc, Vector3i blockdim) {
     destroy_image(astc_image);
 }
 
-} // namespace Moer
+} // namespace Moer::Resource

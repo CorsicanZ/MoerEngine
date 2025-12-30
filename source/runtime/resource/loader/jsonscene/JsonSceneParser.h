@@ -13,8 +13,7 @@ public:
     JsonSceneParser() noexcept;
     ~JsonSceneParser() noexcept;
 
-    static RESOURCE_API bool
-    LoadSceneFromFile(const Path& _abs_scn_json_path, Moer::ECS::Scene& _scene) noexcept;
+    static RESOURCE_API bool LoadSceneFromFile(const Path& _abs_scn_json_path, Scene& _scene) noexcept;
 
 private:
     class Impl;

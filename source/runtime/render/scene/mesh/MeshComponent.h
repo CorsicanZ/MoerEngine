@@ -31,10 +31,10 @@ struct Box3D {
 
 struct RENDER_API MeshComponent {
     struct Geometry {
-        uint32 index_offset = 0;
-        uint32 index_count  = 0;
-        // uint32 vertex_offset = 0;
-        // uint32 vertex_count  = 0;
+        uint32 index_offset  = 0;
+        uint32 index_count   = 0;
+        uint32 vertex_offset = 0;
+        uint32 vertex_count  = 0;
 
         ECS::Entity material_entity = ECS::invalid_entity;
 

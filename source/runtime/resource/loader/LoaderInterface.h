@@ -9,6 +9,7 @@ namespace Moer::Resource {
 class LoaderInterface {
 public:
     static RESOURCE_API void
-    LoadSceneFromFileAsync(const std::filesystem::path& _file_path, ECS::Scene& _scene) noexcept;
+    LoadSceneFromFileAsync(const std::filesystem::path& _file_path, Scene& _scene) noexcept;
 };
+
 } // namespace Moer::Resource

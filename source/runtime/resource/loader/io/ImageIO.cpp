@@ -11,7 +11,7 @@
 #include <numeric>
 #include <stb/stb_image_resize2.h>
 
-namespace Moer {
+namespace Moer::Resource {
 
 struct MipmapDesc {
     uint32_t level = 0;
@@ -413,4 +413,4 @@ ImageIO::ReadFromMemory(const unsigned char* _memory_data, size_t _len, uint32_t
     return desc;
 }
 
-} // namespace Moer
+} // namespace Moer::Resource

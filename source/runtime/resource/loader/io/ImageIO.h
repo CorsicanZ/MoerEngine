@@ -4,7 +4,7 @@
 
 #include <filesystem>
 #include <functional>
-namespace Moer {
+namespace Moer::Resource {
 
 struct ImageReadDesc {
     uint32                     width{0}, height{0}, layers{1}, mips{1}, channel{4}, data_size{0};
@@ -28,4 +28,4 @@ public:
     static ImageReadDesc
     ReadFromMemory(const unsigned char* _memory_data, size_t _len, uint32_t _desired_channal = 4);
 };
-} // namespace Moer
+} // namespace Moer::Resource

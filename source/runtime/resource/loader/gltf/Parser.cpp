@@ -18,7 +18,6 @@
 #include "scene/material/Material.h"
 #include "scene/material/MaterialInstance.h"
 
-
 #include "shaderheaders/shared/utils/Packing.h"
 #include <cmath>
 #include <filesystem>
@@ -27,8 +26,6 @@
 #include <stb/stb_image.h>
 
 namespace Moer::Resource::Gltf {
-
-using namespace Moer::ECS;
 
 // using GeometrySet = Moer::UnorderedSet<aiMesh*>;
 
@@ -205,13 +202,13 @@ bool Parser::Impl::LoadSceneFromFile(
             auto  name     = material->GetName();
             if (name.length == 0) {
                 // Assimp will import a default material with empty name, so we need to assign a default name
-                name = aiString("default_material");
+                name = aiString("____default_material");
             }
             auto mat_entity = _scene.AddMaterial(name.C_Str());
-            //TODO: fill material properties maybe
             _scene.Attach(mat_entity, root_entity);
-            // auto* mat_component = _scene.materials.GetComponent(mat_entity);
-            // mat_component->SetMaterial(material);
+            auto* mat_component = _scene.materials.GetComponent(mat_entity);
+            // Load: default loading LitMaterial
+            mat_component = MoerNew(LitMaterialComponent)(material->GetName().C_Str());
         }
     };
     load_material();

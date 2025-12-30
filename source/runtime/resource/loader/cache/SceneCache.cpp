@@ -11,7 +11,7 @@
 
 #include <serialize/Serializer.h>
 
-namespace Moer::ECS {
+namespace Moer::Resource {
 
 static std::filesystem::path RemapScenePath(const std::filesystem::path& _path) {
     long long time = std::filesystem::exists(_path) ?
@@ -410,4 +410,4 @@ void SceneCache::LoadSceneFromCache(const std::filesystem::path& _path, Scene& _
     load_info->progress.store(1);
 }
 
-} // namespace Moer::ECS
+} // namespace Moer::Resource
