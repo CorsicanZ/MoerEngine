@@ -39,14 +39,23 @@ public:
         const Camera&       camera,
         TextureWithHandle   input_image
     ) {
-
         DofPipelineBindlessParam param{};
+     
+        float2 resolution = float2(input_image.GetSize());
 
-        param.input_color_tex = input_image.hdl;
+        param.resolution      = resolution;                                     // 分辨率
+        param.resolution_inv  = float2(1.f / resolution.x, 1.f / resolution.y); // 分辨率倒数
+        param.input_color_tex = input_image.hdl;                                // 输入颜色纹理
+        param.debug_param     = ui_config.dof_debug_param;
 
-        // ==============================
-        // TODO(lab2-dof): 从 RasterConfig (ui_config)、Camera 中获取相关配置项，并传入 DofPipelineBindlessParam param
-        // ==============================
+        param.near_clip = camera.GetNearClip(); 
+        param.far_clip  = camera.GetFarClip();
+        param.depth_tex = context.textures.depth_linear_sampler.hdl; 
+        param.dof_intensity = ui_config.dof_intensity; 
+        param.focus_plane_distance = ui_config.focus_plane_distance; 
+        param.focus_plane_range = ui_config.focus_plane_range; 
+        param.b_visualize_focus_plan = ui_config.b_visualize_focus_plan;
+        param.b_visualize_blur_radius = ui_config.b_visualize_blur_radius;
 
         context.cmd_list.Gfx(m_dof_pipeline, context.bdls, param)
             .Draw(
