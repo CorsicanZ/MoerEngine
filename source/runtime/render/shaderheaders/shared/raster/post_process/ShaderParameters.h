@@ -157,14 +157,14 @@ struct DofPipelineBindlessParam {
     float2 resolution;      // 分辨率
     float2 resolution_inv;  // 分辨率倒数
     uint   input_color_tex; // 输入颜色纹理handle
-    uint   depth_tex;       // 深度纹理handle（预留）
+    uint   depth_tex;       // 深度纹理handle
     float  debug_param;     // 调试参数
-    float  near_clip;       // 摄像机近裁剪面（预留）
-    float  far_clip;        // 摄像机远裁剪面（预留）
-    float  dof_intensity;   // DOF强度（预留）
-    float  focus_plane_distance;   // 焦平面距离（预留）
-    float  focus_plane_range;      // 焦平面范围（预留）
-    uint   b_visualize_focus_plan; // 可视化焦平面（预留)
+    float  near_clip;       // 摄像机近裁剪面
+    float  far_clip;        // 摄像机远裁剪面
+    float  dof_intensity;   // DOF强度
+    float  focus_plane_distance;   // 焦平面距离
+    float  focus_plane_range;      // 焦平面范围
+    uint   b_visualize_focus_plan; // 可视化焦平面
     uint   b_visualize_blur_radius;
 };
 

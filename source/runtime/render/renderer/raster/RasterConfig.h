@@ -240,7 +240,6 @@ struct RasterConfig {
 
     // MARK: Dof
     // ==============================
-    // TODO(lab2-dof): 实现景深相关的配置项，从 UI (RasterUI.cpp) 获取输入，将结果传递给 Renderer (DofPass.h)
     float dof_debug_param = 0.5f;
     float dof_intensity   = 1.0f;
     float focus_plane_distance = 5.0f;
